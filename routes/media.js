@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { config } = require('../config');
 const db = require('../database/db');
-const { param } = require('express-validator');
+const { param, validationResult } = require('express-validator');
 const fs = require('fs');
 const path = require('path');
 const jschardet = require('jschardet');
@@ -10,139 +10,265 @@ const { getTrackList, supportedSubtitleExtList } = require('../filesystem/utils'
 const { joinFragments } = require('./utils/url');
 const { isValidRequest } = require('./utils/validate');
 
-// GET (stream) a specific track from work folder
-router.get('/stream/RJ:id/:trackFile([\\s\\S]*)', param('id').isInt(), (req, res, next) => {
-  if (!isValidRequest(req, res)) return;
+/**
+ * 统一错误处理包装
+ */
+const asyncHandler = fn => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
 
-  db.knex('t_work')
-    .select('root_folder', 'dir')
-    .where('id', '=', req.params.id)
-    .first()
-    .then(work => {
-      const rootFolder = config.rootFolders.find(rootFolder => rootFolder.name === work.root_folder);
-      if (rootFolder) {
-        getTrackList(req.params.id, path.join(rootFolder.path, work.dir))
-          .then(tracks => {
-            const track = tracks.find(track => track.mediaPath === `RJ${req.params.id}/${req.params.trackFile}`);
-
-            const fileName = path.join(rootFolder.path, work.dir, track.subtitle || '', track.title);
-            const extName = path.extname(fileName);
-            if ((supportedSubtitleExtList + ['.txt']).includes(extName)) {
-              const fileBuffer = fs.readFileSync(fileName);
-              const charsetMatch = jschardet.detect(fileBuffer).encoding;
-              if (charsetMatch) {
-                res.setHeader('Content-Type', `text/plain; charset=${charsetMatch}`);
-              }
-            }
-            if (extName === '.flac') {
-              // iOS不支持audio/x-flac
-              res.setHeader('Content-Type', `audio/flac`);
-            }
-
-            // Offload from express, 302 redirect to a virtual directory in a reverse proxy like Nginx
-            // Only redirect media files, not including text files and lrcs because we need charset detection
-            // so that the browser properly renders them
-            if (config.offloadMedia && extName !== '.txt' && extName !== '.lrc') {
-              // Path controlled by config.offloadMedia and config.offloadStreamPath
-              // By default: /media/stream/VoiceWork/RJ123456/subdirs/track.mp3
-              // If the folder is deeper: /media/stream/VoiceWork/second/RJ123456/subdirs/track.mp3
-              const baseUrl = config.offloadStreamPath;
-              let offloadUrl = joinFragments(baseUrl, rootFolder.name, work.dir, track.subtitle || '', track.title);
-              if (process.platform === 'win32') {
-                offloadUrl = offloadUrl.replace(/\\/g, '/');
-              }
-
-              res.redirect(offloadUrl);
-            } else {
-              // By default, serve file through express
-              res.sendFile(fileName);
-            }
-          })
-          .catch(err => next(err));
-      } else {
-        res.status(500).send({ error: `找不到文件夹: "${work.root_folder}"，请尝试重启服务器或重新扫描.` });
-      }
-    })
-    .catch(err => next(err));
-});
-
-router.get('/download/RJ:id/:trackFile([\\s\\S]*)', param('id').isInt(), (req, res, next) => {
-  if (!isValidRequest(req, res)) return;
-
-  db.knex('t_work')
-    .select('root_folder', 'dir')
-    .where('id', '=', req.params.id)
-    .first()
-    .then(work => {
-      const rootFolder = config.rootFolders.find(rootFolder => rootFolder.name === work.root_folder);
-      if (rootFolder) {
-        getTrackList(req.params.id, path.join(rootFolder.path, work.dir))
-          .then(tracks => {
-            const track = tracks.find(track => track.mediaPath === `RJ${req.params.id}/${req.params.trackFile}`);
-
-            // Offload from express, 302 redirect to a virtual directory in a reverse proxy like Nginx
-            if (config.offloadMedia) {
-              // Path controlled by config.offloadMedia and config.offloadDownloadPath
-              // By default: /media/download/VoiceWork/RJ123456/subdirs/track.mp3
-              // If the folder is deeper: /media/download/VoiceWork/second/RJ123456/subdirs/track.mp3
-              const baseUrl = config.offloadDownloadPath;
-              let offloadUrl = joinFragments(baseUrl, rootFolder.name, work.dir, track.subtitle || '', track.title);
-              if (process.platform === 'win32') {
-                offloadUrl = offloadUrl.replace(/\\/g, '/');
-              }
-
-              // Note: you should set 'Content-Disposition: attachment' header in your reverse proxy for the download virtual directory
-              // By default the directory is /media/download
-              res.redirect(offloadUrl);
-            } else {
-              // By default, serve file through express
-              res.download(path.join(rootFolder.path, work.dir, track.subtitle || '', track.title));
-            }
-          })
-          .catch(err => next(err));
-      } else {
-        res.status(500).send({ error: `找不到文件夹: "${work.root_folder}"，请尝试重启服务器或重新扫描.` });
-      }
-    });
-});
-
-router.get('/check-lrc/:id/:index', param('id').isInt(), param('index').isInt(), (req, res, next) => {
-  if (!isValidRequest(req, res)) return;
-
-  db.knex('t_work')
+/**
+ * 获取 work + rootFolder
+ */
+async function getWorkAndRoot(id) {
+  const work = await db.knex('t_work')
     .select('root_folder', 'dir', 'lyric_status')
-    .where('id', '=', req.params.id)
-    .first()
-    .then(work => {
-      const rootFolder = config.rootFolders.find(rootFolder => rootFolder.name === work.root_folder);
-      if (rootFolder) {
-        getTrackList(req.params.id, path.join(rootFolder.path, work.dir))
-          .then(tracks => {
-            const track = tracks[req.params.index];
-            let responseSent = false;
+    .where('id', '=', id)
+    .first();
 
-            if (!work.lyric_status) {
-              res.send({ result: false, message: '不存在歌词文件', mediaPath: '' });
-            } else {
-              const lrcFileName = track.title.substring(0, track.title.lastIndexOf('.')) + '.lrc';
-              // 文件名、子目录名相同
-              tracks.forEach(trackItem => {
-                if (trackItem.title === lrcFileName) {
-                  res.send({ result: true, message: '找到歌词文件', mediaPath: trackItem.mediaPath });
-                  responseSent = true;
-                }
-              });
-              if (!responseSent) {
-                res.send({ result: false, message: '该文件不存在歌词文件', mediaPath: '' });
-              }
-            }
-          })
-          .catch(err => next(err));
-      } else {
-        res.status(500).send({ error: `找不到文件夹: "${work.root_folder}"，请尝试重启服务器或重新扫描.` });
+  if (!work) {
+    throw new Error('work not found');
+  }
+
+  const rootFolder = config.rootFolders.find(
+    r => r.name === work.root_folder
+  );
+
+  if (!rootFolder) {
+    throw new Error(`找不到文件夹: "${work.root_folder}"`);
+  }
+
+  return { work, rootFolder };
+}
+
+/**
+ * 获取 track
+ */
+async function getTrack(id, trackFile, rootFolder, work) {
+  const tracks = await getTrackList(
+    id,
+    path.join(rootFolder.path, work.dir)
+  );
+
+  const track = tracks.find(
+    t => t.mediaPath === `RJ${id}/${trackFile}`
+  );
+
+  if (!track) {
+    return null;
+  }
+
+  return { track, tracks };
+}
+
+/**
+ * =========================
+ * STREAM
+ * =========================
+ */
+router.get(
+  '/stream/RJ:id/:trackFile([\\s\\S]*)',
+  param('id').isInt(),
+  asyncHandler(async (req, res) => {
+    if (!isValidRequest(req, res)) return;
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const id = req.params.id;
+
+    const { work, rootFolder } = await getWorkAndRoot(id);
+
+    const result = await getTrack(
+      id,
+      req.params.trackFile,
+      rootFolder,
+      work
+    );
+
+    if (!result) {
+      return res.status(404).send({ error: 'track not found' });
+    }
+
+    const { track } = result;
+
+    const fileName = path.join(
+      rootFolder.path,
+      work.dir,
+      track.subtitle || '',
+      track.title
+    );
+
+    const extName = path.extname(fileName).toLowerCase();
+
+    // ===== 文本编码处理 =====
+    if ([...supportedSubtitleExtList, '.txt'].includes(extName)) {
+      const fileBuffer = fs.readFileSync(fileName);
+      const charset = jschardet.detect(fileBuffer).encoding;
+      if (charset) {
+        res.setHeader('Content-Type', `text/plain; charset=${charset}`);
       }
-    })
-    .catch(err => next(err));
+    }
+
+    // ===== flac 兼容 =====
+    if (extName === '.flac') {
+      res.setHeader('Content-Type', 'audio/flac');
+    }
+
+    // ===== offload =====
+    if (
+      config.offloadMedia &&
+      extName !== '.txt' &&
+      extName !== '.lrc'
+    ) {
+      let offloadUrl = joinFragments(
+        config.offloadStreamPath,
+        rootFolder.name,
+        work.dir,
+        track.subtitle || '',
+        track.title
+      );
+
+      if (process.platform === 'win32') {
+        offloadUrl = offloadUrl.replace(/\\/g, '/');
+      }
+
+      return res.redirect(offloadUrl);
+    }
+
+    // ===== 默认 =====
+    return res.sendFile(fileName);
+  })
+);
+
+/**
+ * =========================
+ * DOWNLOAD
+ * =========================
+ */
+router.get(
+  '/download/RJ:id/:trackFile([\\s\\S]*)',
+  param('id').isInt(),
+  asyncHandler(async (req, res) => {
+    if (!isValidRequest(req, res)) return;
+
+    const id = req.params.id;
+
+    const { work, rootFolder } = await getWorkAndRoot(id);
+
+    const result = await getTrack(
+      id,
+      req.params.trackFile,
+      rootFolder,
+      work
+    );
+
+    if (!result) {
+      return res.status(404).send({ error: 'track not found' });
+    }
+
+    const { track } = result;
+
+    if (config.offloadMedia) {
+      let offloadUrl = joinFragments(
+        config.offloadDownloadPath,
+        rootFolder.name,
+        work.dir,
+        track.subtitle || '',
+        track.title
+      );
+
+      if (process.platform === 'win32') {
+        offloadUrl = offloadUrl.replace(/\\/g, '/');
+      }
+
+      return res.redirect(offloadUrl);
+    }
+
+    const filePath = path.join(
+      rootFolder.path,
+      work.dir,
+      track.subtitle || '',
+      track.title
+    );
+
+    return res.download(filePath);
+  })
+);
+
+/**
+ * =========================
+ * CHECK LRC
+ * =========================
+ */
+router.get(
+  '/check-lrc/:id/:index',
+  param('id').isInt(),
+  param('index').isInt(),
+  asyncHandler(async (req, res) => {
+    if (!isValidRequest(req, res)) return;
+
+    const id = req.params.id;
+    const index = parseInt(req.params.index, 10);
+
+    const { work, rootFolder } = await getWorkAndRoot(id);
+
+    const tracks = await getTrackList(
+      id,
+      path.join(rootFolder.path, work.dir)
+    );
+
+    const track = tracks[index];
+
+    if (!track) {
+      return res.status(404).send({ error: 'track index invalid' });
+    }
+
+    if (!work.lyric_status) {
+      return res.send({
+        result: false,
+        message: '不存在歌词文件',
+        mediaPath: ''
+      });
+    }
+
+    const lrcFileName =
+      track.title.substring(0, track.title.lastIndexOf('.')) + '.lrc';
+
+    const found = tracks.find(t => t.title === lrcFileName);
+
+    if (found) {
+      return res.send({
+        result: true,
+        message: '找到歌词文件',
+        mediaPath: found.mediaPath
+      });
+    }
+
+    return res.send({
+      result: false,
+      message: '该文件不存在歌词文件',
+      mediaPath: ''
+    });
+  })
+);
+
+/**
+ * =========================
+ * 全局错误兜底（必须有）
+ * =========================
+ */
+router.use((err, req, res, next) => {
+  console.error(err);
+
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  res.status(500).send({
+    error: err.message || 'Internal Server Error'
+  });
 });
 
 module.exports = router;
