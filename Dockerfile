@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM node:24-alpine as build-dep
 
 # Create app directory
@@ -16,11 +18,11 @@ WORKDIR /frontend
 # So I prebuilt the binaries for arm64 and armv7
 # @quasar/app v2 no longer uses this deprecated package, so this line will be removed in the future
 # ENV SASS_BINARY_SITE="https://github.com/umonaca/node-sass/releases/download"
+# Build with: docker build --build-context frontend=../kikoeru-quasar -t kikoeru .
 RUN npm install -g @quasar/cli@2.0.0
-COPY kikoeru-quasar/package* ./
-# RUN git clone https://github.com/MirrichWangD/kikoeru-quasar .
+COPY --from=frontend package* ./
 RUN npm ci
-COPY kikoeru-quasar .
+COPY --from=frontend . .
 RUN quasar build && quasar build -m pwa
 
 # Final stage
