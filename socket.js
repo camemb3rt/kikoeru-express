@@ -5,7 +5,7 @@ const child_process = require('child_process'); // 子进程
 const { config } = require('./config');
 
 const initSocket = (server) => {
-  const io = socket(server);
+  const io = socket(server, { allowEIO3: true });
   if (config.auth) {
     io.use(jwtAuth.authenticate({
       secret: config.jwtsecret

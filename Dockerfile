@@ -1,4 +1,6 @@
-FROM node:18-alpine as build-dep
+# syntax=docker/dockerfile:1
+
+FROM node:24-alpine as build-dep
 
 # Create app directory
 WORKDIR /usr/src/kikoeru
@@ -6,7 +8,7 @@ WORKDIR /usr/src/kikoeru
 # Install dependencies
 COPY package*.json ./
 
-RUN apk add --no-cache python3 make gcc g++ \
+RUN apk add --no-cache python3 py3-setuptools make gcc g++ \
     && npm ci --only=production
 
 # Build SPA and PWA
@@ -15,14 +17,16 @@ WORKDIR /frontend
 # @quasar/app v1 requires node-ass, which takes 30 minutes to compile libsass in CI for arm64 and armv7
 # So I prebuilt the binaries for arm64 and armv7
 # @quasar/app v2 no longer uses this deprecated package, so this line will be removed in the future
-ENV SASS_BINARY_SITE="https://github.com/umonaca/node-sass/releases/download"
+# ENV SASS_BINARY_SITE="https://github.com/umonaca/node-sass/releases/download"
+# Build with: docker build --build-context frontend=../kikoeru-quasar -t kikoeru .
 RUN npm install -g @quasar/cli@2.0.0
-RUN git clone https://github.com/MirrichWangD/kikoeru-quasar .
+COPY --from=frontend package* ./
 RUN npm ci
+COPY --from=frontend . .
 RUN quasar build && quasar build -m pwa
 
 # Final stage
-FROM node:18-alpine
+FROM node:24-alpine
 ENV IS_DOCKER=true
 WORKDIR /usr/src/kikoeru
 
