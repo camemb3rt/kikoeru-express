@@ -120,7 +120,7 @@ router.get(
     if (
       config.offloadMedia &&
       extName !== '.txt' &&
-      extName !== '.lrc'
+      !supportedSubtitleExtList.includes(extName)
     ) {
       let offloadUrl = joinFragments(
         config.offloadStreamPath,
@@ -233,16 +233,23 @@ router.get(
       });
     }
 
-    const lrcFileName =
-      track.title.substring(0, track.title.lastIndexOf('.')) + '.lrc';
-
-    const found = tracks.find(t => t.title === lrcFileName);
+    const lyricExtensions = ['.lrc', '.srt', '.vtt'];
+    const trackBaseName = track.title.substring(0, track.title.lastIndexOf('.'));
+    const lyricFileNames = new Set(lyricExtensions.flatMap(extension => [
+      `${trackBaseName}${extension}`,
+      `${track.title}${extension}`
+    ]).map(fileName => fileName.toLowerCase()));
+    const found = tracks.find(candidate =>
+      candidate.subtitle === track.subtitle &&
+      lyricFileNames.has(candidate.title.toLowerCase())
+    );
 
     if (found) {
       return res.send({
         result: true,
         message: '找到歌词文件',
-        mediaPath: found.mediaPath
+        mediaPath: found.mediaPath,
+        lyricExtension: path.extname(found.title).toLowerCase()
       });
     }
 
