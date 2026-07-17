@@ -225,24 +225,30 @@ router.get(
       return res.status(404).send({ error: 'track index invalid' });
     }
 
-    if (!work.lyric_status) {
-      return res.send({
-        result: false,
-        message: '不存在歌词文件',
-        mediaPath: ''
-      });
-    }
-
-    const lrcFileName =
-      track.title.substring(0, track.title.lastIndexOf('.')) + '.lrc';
-
-    const found = tracks.find(t => t.title === lrcFileName);
+    // Scan the directory directly rather than trusting lyric_status. The
+    // database value can be stale when an existing Docker volume is reused.
+    const lyricExtensions = ['.lrc', '.srt', '.vtt'];
+    const trackBaseName = track.title.substring(0, track.title.lastIndexOf('.'));
+    const lyricFileNames = new Set(
+      lyricExtensions
+        .flatMap(extension => [
+          `${trackBaseName}${extension}`,
+          `${track.title}${extension}`
+        ])
+        .map(fileName => fileName.toLowerCase())
+    );
+    const found = tracks.find(
+      candidate =>
+        candidate.subtitle === track.subtitle &&
+        lyricFileNames.has(candidate.title.toLowerCase())
+    );
 
     if (found) {
       return res.send({
         result: true,
         message: '找到歌词文件',
-        mediaPath: found.mediaPath
+        mediaPath: found.mediaPath,
+        lyricExtension: path.extname(found.title).toLowerCase()
       });
     }
 
