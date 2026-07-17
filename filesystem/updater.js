@@ -23,6 +23,10 @@ const argv = yargs(hideBin(process.argv))
       description: 'Refresh dynamic metadata and voice actors',
       type: 'boolean',
     })
+    .option('workId', {
+      description: 'Refresh metadata for one work only',
+      type: 'string',
+    })
     .argv;
 
 const updateOptions = {};
@@ -37,7 +41,7 @@ if (argv.refreshAll) {
   updateOptions.includeVA = true
 }
 
-performUpdate(updateOptions)
+performUpdate(updateOptions, argv.workId)
   .then(() => {
     process.exit(0);
   })

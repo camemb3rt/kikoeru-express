@@ -1,10 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const cheerio = require('cheerio');
 const LimitPromise = require('limit-promise'); // 限制并发数量
 
 const axios = require('../scraper/axios.js'); // 数据请求
 const { scrapeWorkMetadataFromDLsite, scrapeDynamicWorkMetadataFromDLsite } = require('../scraper/dlsite');
 const { scrapeWorkMetadataFromAsmrOne } = require('../scraper/asmrOne');
+const scrapeWorkMetadataFromHVDB = require('../scraper/hvdb');
 const { scrapeWorkMemo } = require('../scraper/memo');
 
 const db = require('../database/db');
@@ -12,7 +14,7 @@ const { createSchema } = require('../database/schema');
 
 const { getFolderList, deleteCoverImageFromDisk, saveCoverImageToDisk } = require('./utils');
 const { md5 } = require('../auth/utils');
-const { nameToUUID } = require('../scraper/utils');
+const { nameToUUID, toDlsiteWorkCode } = require('../scraper/utils');
 
 const { config } = require('../config');
 const { updateLock } = require('../upgrade');
@@ -121,7 +123,7 @@ process.on('message', m => {
   if (m.emit === 'SCAN_INIT_STATE') {
     process.send({ event: 'SCAN_INIT_STATE', payload: { tasks, failedTasks, mainLogs, results } });
   } else if (m.exit) {
-    logger.main.error(' ! 终止扫描过程.');
+    logger.main.error(' ! Scan cancelled.');
     process.exit(1);
   }
 });
@@ -164,14 +166,21 @@ async function scrapeWorkMetadata(id, language) {
       return metadata;
     })
     .catch(err => {
-      logger.task.warn(rjcode, `DLsite 获取元数据失败: ${err.message}`);
+      logger.task.warn(rjcode, `DLsite metadata request failed; trying ASMR.one: ${err.message}`);
       return scrapeWorkMetadataFromAsmrOne(id, language)
         .then(metadata => {
           return metadata;
         })
         .catch(err => {
-          logger.task.warn(rjcode, `asmr-one 获取元数据失败: ${err.message}`);
-          throw err;
+          logger.task.warn(rjcode, `ASMR.one metadata request failed: ${err.message}`);
+          return scrapeWorkMetadataFromHVDB(id)
+            .then(metadata => {
+              return metadata;
+            })
+            .catch(err => {
+              logger.task.warn(rjcode, `HVDB metadata request failed: ${err.message}`);
+              throw err;
+            });
         });
     });
 }
@@ -188,7 +197,7 @@ async function getMetadata(folder, tagLanguage) {
   // 先从DLsite抓取元数据，若失败则从asmr-one抓取元数据
   return scrapeWorkMetadata(folder.id, tagLanguage)
     .then(async metadata => {
-      logger.task.info(rjcode, '元数据抓取成功! 添加到数据库...');
+      logger.task.info(rjcode, 'Metadata fetched successfully. Adding it to the database...');
 
       metadata.rootFolderName = folder.rootFolderName;
       metadata.dir = folder.relativePath;
@@ -197,59 +206,97 @@ async function getMetadata(folder, tagLanguage) {
       return db
         .insertWorkMetadata(metadata)
         .then(() => {
-          logger.task.info(rjcode, '数据库: 元数据添加成功.');
+          logger.task.info(rjcode, 'Database: metadata added successfully.');
           return 'added';
         })
         .catch(err => {
-          logger.task.warn(rjcode, `数据库: 元数据添加失败: ${err.message}`);
+          logger.task.warn(rjcode, `Database: failed to add metadata: ${err.message}`);
           return 'failed';
         });
     })
     .catch(err => {
-      logger.task.warn(rjcode, `数据库: 元数据抓取失败: ${err.message}`);
+      logger.task.warn(rjcode, `Database: metadata request failed: ${err.message}`);
       return 'failed';
     });
 }
 
 /**
- * 从 DLsite 下载封面图片，并保存到 Images 文件夹，
+ * Build a DLsite cover URL for a work code. Translation pages can use a
+ * different code from the cover artwork's original work, so callers should
+ * resolve the cover code from the product page before using this helper.
+ */
+const getDlsiteCoverUrl = (id, type) => {
+  const id2 = id % 1000 === 0 ? id : Math.floor(id / 1000) * 1000 + 1000;
+  const rjcode = toDlsiteWorkCode(id);
+  const rjcode2 = toDlsiteWorkCode(id2);
+
+  if (type === '240x240' || type === '360x360') {
+    return `https://img.dlsite.jp/resize/images2/work/doujin/RJ${rjcode2}/RJ${rjcode}_img_main_${type}.jpg`;
+  }
+  return `https://img.dlsite.jp/modpub/images2/work/doujin/RJ${rjcode2}/RJ${rjcode}_img_${type}.jpg`;
+};
+
+/**
+ * Resolve a translated DLsite work to the work code used by its cover image.
+ */
+const resolveDlsiteCoverCode = async id => {
+  const url = `https://www.dlsite.com/maniax/work/=/product_id/RJ${toDlsiteWorkCode(id)}.html?locale=en_US`;
+  const response = await axios.retryGet(url, {
+    retry: {},
+    headers: { cookie: 'locale=en_US', 'accept-language': 'en-US,en;q=0.9' }
+  });
+  const $ = cheerio.load(response.data);
+  const coverUrl = $('meta[property="og:image"]').attr('content') || '';
+  const match = coverUrl.match(/RJ(\d+)_img_main\.jpg/);
+  return match ? match[1] : String(id);
+};
+
+/**
+ * Downloads cover images and saves them with the local work's RJ code.
  * 返回一个 Promise 对象，处理结果: 'added' or 'failed'
  * @param {number} id work id
  * @param {Array} types img types: ['main', 'sam', 'sam@2x', 'sam@3x', '240x240', '360x360']
  */
 const getCoverImage = async (id, types) => {
-  const rjcode = id;
-  const id2 = id % 1000 === 0 ? id : Math.floor(id / 1000) * 1000 + 1000;
-  const rjcode2 = id2 >= 1000000 ? `0${id2}`.slice(-8) : String(id2);
-  const promises = [];
-  types.forEach(type => {
-    let url = `https://img.dlsite.jp/modpub/images2/work/doujin/RJ${rjcode2}/RJ${rjcode}_img_${type}.jpg`;
-    if (type === '240x240' || type === '360x360') {
-      url = `https://img.dlsite.jp/resize/images2/work/doujin/RJ${rjcode2}/RJ${rjcode}_img_main_${type}.jpg`;
+  const rjcode = String(id);
+  let dlsiteCoverCode = String(id);
+  try {
+    dlsiteCoverCode = await resolveDlsiteCoverCode(id);
+    if (dlsiteCoverCode !== String(id)) {
+      logger.task.info(rjcode, `Resolved translated work cover to RJ${dlsiteCoverCode}.`);
     }
-    promises.push(
-      axios
-        .retryGet(url, { responseType: 'stream', retry: {} })
-        .then(async imageRes => {
-          return saveCoverImageToDisk(imageRes.data, rjcode, type).then(() => {
-            logger.task.info(rjcode, `封面 RJ${rjcode}_img_${type}.jpg 下载成功.`);
-            return 'added';
-          });
-        })
-        .catch(err => {
-          logger.task.info(rjcode, `在下载封面 RJ${rjcode}_img_${type}.jpg 过程中出错: ${err.message}`);
-          return 'failed';
-        })
-    );
-  });
+  } catch (err) {
+    logger.task.warn(rjcode, `Could not resolve the DLsite cover code: ${err.message}`);
+  }
 
-  const results = await Promise.all(promises);
-  results.forEach(result => {
-    if (result === 'failed') {
+  const results = await Promise.all(
+    types.map(async type => {
+      const urls = [getDlsiteCoverUrl(Number(dlsiteCoverCode), type)];
+      if (dlsiteCoverCode !== String(id)) urls.push(getDlsiteCoverUrl(id, type));
+      urls.push(`https://api.asmr-200.com/api/cover/${id}.jpg?type=${type}`);
+
+      for (const url of urls) {
+        try {
+          const imageRes = await axios.retryGet(url, { responseType: 'stream', retry: {} });
+          await saveCoverImageToDisk(imageRes.data, rjcode, type);
+          logger.task.info(rjcode, `Cover image RJ${rjcode}_img_${type}.jpg downloaded successfully.`);
+          return 'added';
+        } catch (err) {
+          logger.task.warn(rjcode, `Cover source failed for ${type}: ${err.message}`);
+        }
+      }
+
+      logger.task.error(rjcode, `Could not download cover image RJ${rjcode}_img_${type}.jpg.`);
       return 'failed';
-    }
-  });
-  return 'added';
+    })
+  );
+
+  return results.every(result => result === 'added') ? 'added' : 'failed';
+};
+
+const getMissingCoverTypes = id => {
+  const coverTypes = ['main', 'sam', '240x240'];
+  return coverTypes.filter(type => !fs.existsSync(path.join(config.coverFolderDir, `RJ${id}_img_${type}.jpg`)));
 };
 
 /**
@@ -258,23 +305,23 @@ const getCoverImage = async (id, types) => {
  * @param {string} dir 文件夹路径
  */
 async function getWorkMemo(id, dir, readMemo = {}) {
-  logger.task.info(id, '开始扫描本地文件数据...');
+  logger.task.info(id, 'Scanning local file data...');
   return scrapeWorkMemo(id, dir, readMemo)
     .then(async ({ workDuration, memo, lyricStatus }) => {
-      logger.task.info(id, '本地文件信息扫描成功, 更新数据库的本地文件信息...');
+      logger.task.info(id, 'Local file data scanned successfully. Updating the database...');
       return db
         .setWorkMemo(id, workDuration, memo, lyricStatus)
         .then(async () => {
-          logger.task.info(id, '数据库: 本地文件信息更新成功.');
+          logger.task.info(id, 'Database: local file data updated successfully.');
           return 'added';
         })
         .catch(err => {
-          logger.task.warn(id, `数据库: 本地文件信息更新失败: ${err.message}`);
+          logger.task.warn(id, `Database: failed to update local file data: ${err.message}`);
           return 'failed';
         });
     })
     .catch(err => {
-      logger.task.warn(id, `本地文件信息更新失败: ${err.messsage}`);
+      logger.task.warn(id, `Failed to update local file data: ${err.message}`);
     });
 }
 
@@ -308,7 +355,7 @@ async function processFolder(folder) {
 
         if (lostCoverTypes.length) {
           logger.task.add(rjcode);
-          logger.task.info(rjcode, '封面图片缺失，重新下载封面图片...');
+          logger.task.info(rjcode, 'Cover image is missing. Downloading it again...');
 
           return getCoverImage(folder.id, lostCoverTypes);
         } else {
@@ -316,7 +363,7 @@ async function processFolder(folder) {
         }
       } else {
         logger.task.add(rjcode);
-        logger.task.info(rjcode, `发现新文件夹: "${folder.absolutePath}"`);
+        logger.task.info(rjcode, `New folder found: "${folder.absolutePath}"`);
 
         return getMetadata(folder, config.tagLanguage).then(result => {
           if (result === 'failed') {
@@ -328,7 +375,7 @@ async function processFolder(folder) {
                 return 'failed';
               } else {
                 // 下载封面图片
-                logger.task.info(rjcode, '从 DLsite 下载封面...');
+                logger.task.info(rjcode, 'Downloading cover image from DLsite...');
                 return getCoverImage(folder.id, coverTypes);
               }
             });
@@ -370,7 +417,7 @@ async function performCleanup() {
         await deleteCoverImageFromDisk(rjcode);
       } catch (err) {
         if (err && err.code !== 'ENOENT') {
-          logger.main.error(` ! [RJ${rjcode}] 在删除封面过程中出错: ${err.messsage}`);
+          logger.main.error(` ! [RJ${rjcode}] Failed to delete cover image: ${err.message}`);
         }
       }
     })
@@ -383,7 +430,7 @@ async function tryCreateDatabase() {
   try {
     await createSchema();
   } catch (err) {
-    logger.main.error(` ! 在构建数据库结构过程中出错: ${err.message}`);
+    logger.main.error(` ! Failed to build the database schema: ${err.message}`);
     console.error(err.stack);
     process.exit(1);
   }
@@ -397,7 +444,7 @@ async function tryCreateAdminUser() {
     await db.createUser({ name: 'admin', password: md5('admin'), group: 'administrator' });
   } catch (err) {
     if (err.message.indexOf('已存在') === -1) {
-      logger.main.error(` ! 在创建 admin 账号时出错: ${err.message}`);
+      logger.main.error(` ! Failed to create the admin account: ${err.message}`);
       process.exit(1);
     }
   }
@@ -411,12 +458,12 @@ async function fixVADatabase() {
   // かの仔 and こっこ
   let success = true;
   if (updateLock.isLockFilePresent && updateLock.lockFileConfig.fixVA) {
-    logger.main.log('-> 开始进行声优元数据修复，需要联网');
+    logger.main.log('-> Starting voice-actor metadata repair (internet connection required).');
     try {
       const updateResult = await fixVoiceActorBug();
       counts.updated += updateResult;
       updateLock.removeLockFile();
-      logger.main.log('-> 完成元数据修复');
+      logger.main.log('-> Metadata repair complete.');
     } catch (err) {
       logger.main.error('->', err.toString());
       success = false;
@@ -429,14 +476,14 @@ async function fixVADatabase() {
 // 如果清理过程中发生一场则杀死该进程
 async function tryCleanupStage() {
   if (config.skipCleanup) {
-    logger.main.info('-> 跳过清理“不存在的音声数据”');
+    logger.main.info('-> Skipping cleanup of missing works.');
   } else {
     try {
-      logger.main.info('-> 清理本地不再存在的音声的数据与封面图片...');
+      logger.main.info('-> Removing database data and cover images for works no longer present locally...');
       await performCleanup();
-      logger.main.info('-> 清理完成. 现在开始扫描...');
+      logger.main.info('-> Cleanup complete. Starting scan...');
     } catch (err) {
-      logger.main.error(` ! 在执行清理过程中出错: ${err.message}`);
+      logger.main.error(` ! Cleanup failed: ${err.message}`);
       process.exit(1);
     }
   }
@@ -452,9 +499,9 @@ async function tryScanRootFolders() {
         folderList.push(folder);
       }
     }
-    logger.main.info(`-> 共找到 ${folderList.length} 个音声文件夹.`);
+    logger.main.info(`-> Found ${folderList.length} work folder(s).`);
   } catch (err) {
-    logger.main.error(` ! 在扫描根文件夹的过程中出错: ${err.message}`);
+    logger.main.error(` ! Failed to scan the root folder: ${err.message}`);
     process.exit(1);
   }
   return folderList;
@@ -477,7 +524,7 @@ async function tryProcessFolderListParallel(folderList) {
     const duplicateNum = folderList.length - uniqueFolderList.length;
 
     if (duplicateNum) {
-      logger.main.info(`-> 发现 ${duplicateNum} 个重复的音声文件夹.`);
+      logger.main.info(`-> Found ${duplicateNum} work(s) with duplicate folders.`);
 
       for (const key in duplicateSet) {
         // duplicateSet中并不包含存在于uniqueFolderList中的文件夹，
@@ -487,7 +534,7 @@ async function tryProcessFolderListParallel(folderList) {
 
         const rjcode = key; // zero-pad to 6 or 8 digits
 
-        logger.main.info(` -> [RJ${rjcode}] 存在多个文件夹:`);
+        logger.main.info(` -> [RJ${rjcode}] has multiple folders:`);
 
         // 打印音声文件夹的绝对路径
         duplicateSet[key].forEach(folder => {
@@ -508,10 +555,10 @@ async function tryProcessFolderListParallel(folderList) {
         const rjcode = folder.id; // zero-pad to 6 digits\
         switch (result) {
           case 'added':
-            logger.task.info(rjcode, `添加成功! Added: ${counts.added}`);
+            logger.task.info(rjcode, `Added successfully. Total added: ${counts.added}`);
             break;
           case 'failed':
-            logger.task.error(rjcode, `添加失败! Failed: ${counts.failed}`);
+            logger.task.error(rjcode, `Failed to add work. Total failed: ${counts.failed}`);
             break;
           default:
             break;
@@ -521,7 +568,7 @@ async function tryProcessFolderListParallel(folderList) {
       })
     );
   } catch (err) {
-    logger.main.error(` ! 在并行处理音声文件夹过程中出错: ${err.message}`);
+    logger.main.error(` ! Failed while processing work folders in parallel: ${err.message}`);
     console.error(err.stack);
     process.exit(1);
   }
@@ -538,7 +585,7 @@ async function performScan() {
     try {
       fs.mkdirSync(config.coverFolderDir, { recursive: true });
     } catch (err) {
-      logger.main.error(` ! 在创建存放音声封面图片的文件夹时出错: ${err.message}`);
+      logger.main.error(` ! Failed to create the work-cover image directory: ${err.message}`);
       process.exit(1);
     }
   }
@@ -553,8 +600,8 @@ async function performScan() {
   const result = await tryProcessFolderListParallel(folderList);
 
   const message = result.updated
-    ? `扫描完成: 更新 ${result.updated} 个，新增 ${result.added} 个，跳过 ${result.skipped} 个，失败 ${result.failed} 个.`
-    : `扫描完成: 新增 ${result.added} 个，跳过 ${result.skipped} 个，失败 ${result.failed} 个.`;
+    ? `Scan complete: updated ${result.updated}, added ${result.added}, skipped ${result.skipped}, failed ${result.failed}.`
+    : `Scan complete: added ${result.added}, skipped ${result.skipped}, failed ${result.failed}.`;
   logger.finish(message);
 
   db.knex.destroy();
@@ -576,20 +623,30 @@ async function updateMetadata(id, options = {}) {
     scrapeProcessor = () => scrapeWorkMetadata(id, config.tagLanguage);
   }
 
-  const rjcode = id;
+  const rjcode = String(id);
   logger.task.add(rjcode); // logger.task.add only accepts a string
 
   try {
     const metadata = await scrapeProcessor(); // 抓取该音声的元数据
     // 将抓取到的元数据插入到数据库
-    logger.task.log(rjcode, `元数据抓取成功，准备更新元数据...`);
+    logger.task.log(rjcode, 'Metadata fetched successfully. Preparing to update it...');
     metadata.id = id;
 
     await db.updateWorkMetadata(metadata, options);
-    logger.task.log(rjcode, `元数据更新成功`);
+    logger.task.log(rjcode, 'Metadata updated successfully.');
+
+    const missingCoverTypes = getMissingCoverTypes(id);
+    if (missingCoverTypes.length) {
+      fs.mkdirSync(config.coverFolderDir, { recursive: true });
+      logger.task.log(rjcode, 'Downloading missing cover images...');
+      const coverResult = await getCoverImage(id, missingCoverTypes);
+      if (coverResult === 'failed') {
+        logger.task.warn(rjcode, 'Some cover images could not be downloaded.');
+      }
+    }
     return 'updated';
   } catch (err) {
-    logger.task.error(rjcode, `在抓取元数据过程中出错: ${err}`);
+    logger.task.error(rjcode, `Failed to fetch metadata: ${err}`);
     console.error(err.stack);
     return 'failed';
   }
@@ -599,13 +656,16 @@ const updateMetadataLimited = (id, options = null) => limitP.call(updateMetadata
 const updateVoiceActorLimited = id => limitP.call(updateMetadata, id, { includeVA: true });
 
 // eslint-disable-next-line no-unused-vars
-async function performUpdate(options = null) {
-  const baseQuery = db.knex('t_work').select('id');
+async function performUpdate(options = null, workId = null) {
+  let baseQuery = db.knex('t_work').select('id');
+  if (workId) {
+    baseQuery = baseQuery.where('id', workId);
+  }
   const processor = id => updateMetadataLimited(id, options);
 
   const counts = await refreshWorks(baseQuery, 'id', processor);
 
-  logger.finish(`扫描完成: 更新 ${counts.updated} 个，失败 ${counts.failed} 个.`);
+  logger.finish(`Metadata refresh complete: updated ${counts.updated}, failed ${counts.failed}.`);
   db.knex.destroy();
   if (counts.failed) process.exit(1);
 }
@@ -619,7 +679,7 @@ async function fixVoiceActorBug() {
 
 async function refreshWorks(query, idColumnName, processor) {
   return query.then(async works => {
-    logger.main.info(`共 ${works.length} 个音声. 开始刷新`);
+    logger.main.info(`Refreshing metadata for ${works.length} work(s).`);
 
     const counts = { updated: 0, failed: 0 };
 
@@ -636,7 +696,7 @@ async function refreshWorks(query, idColumnName, processor) {
       })
     );
 
-    logger.main.log(`完成元数据更新 ${counts.updated} 个，失败 ${counts.failed} 个.`);
+    logger.main.log(`Metadata refresh complete: updated ${counts.updated}, failed ${counts.failed}.`);
     return counts;
   });
 }
@@ -645,7 +705,7 @@ async function refreshWorks(query, idColumnName, processor) {
 // 例如音频时长、是否包含歌词文件等
 async function scanWorkFile(work) {
   logger.task.add(work.id);
-  logger.task.info(work.id, `扫描作品文件夹: "${work.dir}"`);
+  logger.task.info(work.id, `Scanning work folder: "${work.dir}"`);
 
   const rootFolder = config.rootFolders.find(rootFolder => rootFolder.name === work.root_folder);
   if (!rootFolder) return 'skipped';
@@ -660,7 +720,7 @@ async function scanWorkFile(work) {
 const scanWorkFileLimited = work => limitP.call(scanWorkFile, work);
 async function scanWorkFiles(query) {
   return query.then(async works => {
-    logger.main.info(`共 ${works.length} 个音色作品. 开始扫描本地文件`);
+    logger.main.info(`Scanning local files for ${works.length} work(s).`);
 
     const counts = { updated: 0, skipped: 0, failed: 0 };
 
@@ -674,7 +734,7 @@ async function scanWorkFiles(query) {
       })
     );
 
-    logger.main.log(`完成本地文件更新 ${counts.updated} 个, 跳过 ${counts.skipped} 个, 失败 ${counts.failed} 个.`);
+    logger.main.log(`Local file update complete: updated ${counts.updated}, skipped ${counts.skipped}, failed ${counts.failed}.`);
     return counts;
   });
 }
@@ -683,7 +743,7 @@ async function performModify() {
 
   const counts = await scanWorkFiles(baseQuery);
 
-  logger.finish(`扫描完成: 更新 ${counts.updated} 个, 跳过 ${counts.skipped}个, 失败 ${counts.failed} 个.`);
+  logger.finish(`Local file scan complete: updated ${counts.updated}, skipped ${counts.skipped}, failed ${counts.failed}.`);
   db.knex.destroy();
   if (counts.failed) process.exit(1);
   process.exit(0);

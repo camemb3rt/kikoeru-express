@@ -19,6 +19,15 @@ const hasLetter = (str) => {
   return false;
 };
 
+/**
+ * DLsite uses eight-digit RJ codes for works at or above one million, while
+ * the local database stores those same codes as numbers without the leading 0.
+ */
+const toDlsiteWorkCode = id => {
+  const numericId = Number(id);
+  return numericId >= 1000000 ? String(numericId).padStart(8, '0') : String(numericId);
+};
+
 module.exports = {
-  nameToUUID, hasLetter
+  nameToUUID, hasLetter, toDlsiteWorkCode
 };

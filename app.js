@@ -117,7 +117,7 @@ if (config.httpsEnabled) {
   initSocket(httpsServer);
 }
 
-const listenPort = process.env.PORT || config.listenPort || 8888;
+const listenPort = process.env.PORT || config.listenPort || 5232;
 const localOnly = config.blockRemoteConnection;
 
 // Note: for some unknown reasons, :: does not always work 

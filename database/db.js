@@ -21,7 +21,7 @@ const insertWorkMetadata = async (work) => {
       await trx("t_circle")
         .insert({ id: work.circle.id, name: work.circle.name })
         .onConflict('id') // 使用 onConflict 代替 'insert or ignore'
-        .ignore();
+        .merge(['name']);
 
       // 插入 t_work
       await trx("t_work")
@@ -51,7 +51,7 @@ const insertWorkMetadata = async (work) => {
           name: tag.name,
         })))
         .onConflict('id') // 使用 onConflict 代替 'insert or ignore'
-        .ignore();
+        .merge(['name']);
 
       // 插入 r_tag_work 关系
       const tagRelations = work.tags.map(tag => ({
@@ -67,7 +67,7 @@ const insertWorkMetadata = async (work) => {
           name: va.name,
         })))
         .onConflict('id') // 使用 onConflict 代替 'insert or ignore'
-        .ignore();
+        .merge(['name']);
 
       // 插入 r_va_work 关系
       const vaRelations = work.vas.map(va => ({
@@ -113,11 +113,14 @@ const updateWorkMetadata = (work, options = {}) =>
       }
     }
     if (options.includeTags || options.refreshAll) {
-      if (options.purgeTags) {
-        await trx("r_tag_work").where("work_id", work.id).del();
-      }
+      // A tag refresh is authoritative: remove stale relations before adding
+      // the tags from the selected scraper locale.
+      await trx("r_tag_work").where("work_id", work.id).del();
       for (const tag of work.tags) {
-        await trx.raw("INSERT OR IGNORE INTO t_tag(id, name) VALUES (?, ?)", [tag.id, tag.name]);
+        await trx.raw(
+          "INSERT INTO t_tag(id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+          [tag.id, tag.name]
+        );
         await trx.raw("INSERT OR IGNORE INTO r_tag_work(tag_id, work_id) VALUES (?, ?)", [tag.id, work.id]);
       }
     }
@@ -154,6 +157,7 @@ const getWorkMetadata = async (id, username) => {
       "t_review.rating AS userRating",
       "t_review.review_text",
       "t_review.progress",
+      "t_review.favorite",
       knex.raw("strftime('%Y-%m-%d %H-%M-%S', t_review.updated_at, 'localtime') AS updated_at"),
       "t_review.user_name",
     ])
@@ -168,6 +172,7 @@ const getWorkMetadata = async (id, username) => {
         "userrate.userRating",
         "userrate.review_text",
         "userrate.progress",
+        "userrate.favorite",
         "userrate.updated_at",
         "userrate.user_name",
       ])
@@ -486,6 +491,21 @@ const updateUserReview = async (
 const deleteUserReview = (username, workid) =>
   knex.transaction((trx) => trx("t_review").where("user_name", "=", username).andWhere("work_id", "=", workid).del());
 
+const setUserFavorite = (username, workid, favorite) =>
+  knex.transaction(async trx => {
+    await trx.raw(
+      "UPDATE t_review SET favorite = ?, updated_at = CURRENT_TIMESTAMP WHERE user_name = ? AND work_id = ?;",
+      [favorite, username, workid]
+    );
+    if (favorite) {
+      await trx.raw("INSERT OR IGNORE INTO t_review (user_name, work_id, favorite) VALUES (?, ?, ?);", [
+        username,
+        workid,
+        true
+      ]);
+    }
+  });
+
 // 读取星标及评语 + 作品元数据
 const getWorksWithReviews = async ({
   username = "",
@@ -494,6 +514,7 @@ const getWorksWithReviews = async ({
   orderBy = "release",
   sortOption = "desc",
   filter,
+  favoriteOnly = false,
 } = {}) => {
   let works = [];
   let totalCount = 0;
@@ -504,6 +525,7 @@ const getWorksWithReviews = async ({
       "t_review.rating AS userRating",
       "t_review.review_text",
       "t_review.progress",
+      "t_review.favorite",
       knex.raw("strftime('%Y-%m-%d %H-%M-%S', t_review.updated_at, 'localtime') AS updated_at"),
       "t_review.user_name",
     ])
@@ -518,6 +540,7 @@ const getWorksWithReviews = async ({
         "userrate.userRating",
         "userrate.review_text",
         "userrate.progress",
+        "userrate.favorite",
         "userrate.updated_at",
         "userrate.user_name",
       ])
@@ -528,7 +551,10 @@ const getWorksWithReviews = async ({
         { column: "id", order: "desc" },
       ]);
 
-  if (filter) {
+  if (favoriteOnly) {
+    totalCount = await query().where("favorite", "=", true).count("id as count");
+    works = await query().where("favorite", "=", true).limit(limit).offset(offset);
+  } else if (filter) {
     totalCount = await query().where("progress", "=", filter).count("id as count");
     works = await query().where("progress", "=", filter).limit(limit).offset(offset);
   } else {
@@ -576,6 +602,7 @@ module.exports = {
   deleteUser,
   getWorksWithReviews,
   updateUserReview,
+  setUserFavorite,
   deleteUserReview,
   getWorkMemo,
   setWorkMemo,

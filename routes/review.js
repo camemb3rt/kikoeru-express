@@ -14,6 +14,7 @@ router.get('/',
   query('sort').optional({nullable: true}).isIn(['desc', 'asc']),
   query('seed').optional({nullable: true}).isInt(),
   query('filter').optional({nullable: true}).isIn(['marked', 'listening', 'listened', 'replay', 'postponed']),
+  query('favorite').optional({nullable: true}).isBoolean(),
   // eslint-disable-next-line no-unused-vars
   async (req, res, next) => {
     if(!isValidRequest(req, res)) return;
@@ -26,9 +27,10 @@ router.get('/',
     const offset = (currentPage - 1) * PAGE_SIZE;
     const username = config.auth ? req.user.name : 'admin';
     const filter = req.query.filter;
+    const favoriteOnly = req.query.favorite === 'true';
     
     try {
-      const {works, totalCount} = await db.getWorksWithReviews({username: username, limit: PAGE_SIZE, offset: offset, orderBy: order, sortOption: sort, filter});
+      const {works, totalCount} = await db.getWorksWithReviews({username: username, limit: PAGE_SIZE, offset: offset, orderBy: order, sortOption: sort, filter, favoriteOnly});
 
       normalize(works, {dateOnly: true});
 
@@ -45,6 +47,18 @@ router.get('/',
       console.error(err)
     }
 });
+
+router.put('/favorite',
+  body('work_id').isInt(),
+  body('favorite').isBoolean(),
+  (req, res, next) => {
+    if(!isValidRequest(req, res)) return;
+    const username = config.auth ? req.user.name : 'admin';
+    db.setUserFavorite(username, req.body.work_id, req.body.favorite)
+      .then(() => res.send({ message: req.body.favorite ? 'Added to favourites.' : 'Removed from favourites.' }))
+      .catch(err => next(err));
+  }
+);
 
 // 提交用户评价
 router.put('/',

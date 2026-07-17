@@ -80,14 +80,20 @@ router.get(
     // ['id', "add_time', 'release', 'rating', 'dl_count', 'review_count', 'price', 'rate_average_2dp, nsfw']
     const order = req.query.order || 'add_time';
     const sort = req.query.sort || 'desc';
-    const lyricStatus = JSON.parse(req.query.lyricStatus);
+    const lyricStatus = req.query.lyricStatus ? JSON.parse(req.query.lyricStatus) : false;
     const pageSize = parseInt(req.query.pageSize) || PAGE_SIZE;
     const offset = (currentPage - 1) * pageSize;
     const username = config.auth ? req.user.name : 'admin';
     const shuffleSeed = req.query.seed ? req.query.seed : 7;
+    const excludedIds = String(req.query.excludeIds || '')
+      .split(',')
+      .filter(id => /^\d+$/.test(id));
 
     try {
-      const query = () => db.getWorksBy({ username: username });
+      const query = () => {
+        const worksQuery = db.getWorksBy({ username: username });
+        return excludedIds.length ? worksQuery.whereNotIn('id', excludedIds) : worksQuery;
+      };
       let totalCount;
       let works;
       if (lyricStatus) {
