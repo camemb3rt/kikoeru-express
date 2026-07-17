@@ -42,5 +42,8 @@ APKINDEX.tar.gz
 # Use build artifact from muveex/kikoeru-quasar instead
 dist
 
+# The frontend is supplied separately as Docker's named build context.
+kikoeru-quasar/
+
 # GitHub Actions
 .github
