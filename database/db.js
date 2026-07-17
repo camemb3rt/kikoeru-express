@@ -21,7 +21,7 @@ const insertWorkMetadata = async (work) => {
       await trx("t_circle")
         .insert({ id: work.circle.id, name: work.circle.name })
         .onConflict('id') // 使用 onConflict 代替 'insert or ignore'
-        .ignore();
+        .merge(['name']);
 
       // 插入 t_work
       await trx("t_work")
@@ -51,7 +51,7 @@ const insertWorkMetadata = async (work) => {
           name: tag.name,
         })))
         .onConflict('id') // 使用 onConflict 代替 'insert or ignore'
-        .ignore();
+        .merge(['name']);
 
       // 插入 r_tag_work 关系
       const tagRelations = work.tags.map(tag => ({
@@ -67,7 +67,7 @@ const insertWorkMetadata = async (work) => {
           name: va.name,
         })))
         .onConflict('id') // 使用 onConflict 代替 'insert or ignore'
-        .ignore();
+        .merge(['name']);
 
       // 插入 r_va_work 关系
       const vaRelations = work.vas.map(va => ({
@@ -113,11 +113,14 @@ const updateWorkMetadata = (work, options = {}) =>
       }
     }
     if (options.includeTags || options.refreshAll) {
-      if (options.purgeTags) {
-        await trx("r_tag_work").where("work_id", work.id).del();
-      }
+      // A tag refresh is authoritative: remove stale relations before adding
+      // the tags from the selected scraper locale.
+      await trx("r_tag_work").where("work_id", work.id).del();
       for (const tag of work.tags) {
-        await trx.raw("INSERT OR IGNORE INTO t_tag(id, name) VALUES (?, ?)", [tag.id, tag.name]);
+        await trx.raw(
+          "INSERT INTO t_tag(id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+          [tag.id, tag.name]
+        );
         await trx.raw("INSERT OR IGNORE INTO r_tag_work(tag_id, work_id) VALUES (?, ?)", [tag.id, work.id]);
       }
     }

@@ -5,12 +5,23 @@ const { nameToUUID, hasLetter } = require("./utils");
 
 let asmrOneApiUrl = "";
 
-async function updateAsmrOneApiUrl() {
+function getAsmrOneHeaders(language) {
+  if (language === 'en-us') {
+    return {
+      cookie: 'locale=en_US',
+      'accept-language': 'en-US,en;q=0.9'
+    };
+  }
+
+  return { cookie: 'locale=zh-cn' };
+}
+
+async function updateAsmrOneApiUrl(language) {
   const url = `https://asmr.one/index.html`;
   try {
     const response = await axios.retryGet(url, {
       retry: {},
-      headers: { cookie: "locale=zh-cn" },
+      headers: getAsmrOneHeaders(language),
     });
 
     const $ = cheerio.load(response.data);
@@ -23,8 +34,8 @@ async function updateAsmrOneApiUrl() {
   }
 }
 
-async function scrapeWorkMetadataFromAsmrOne(id) {
-  if (asmrOneApiUrl === "") await updateAsmrOneApiUrl();
+async function scrapeWorkMetadataFromAsmrOne(id, language) {
+  if (asmrOneApiUrl === "") await updateAsmrOneApiUrl(language);
 
   const rjcode = id;
   const url = `https://api.asmr-200.com/api/workInfo/${rjcode}`;
@@ -32,11 +43,20 @@ async function scrapeWorkMetadataFromAsmrOne(id) {
   console.log(`-> [RJ${rjcode}] 从 asmr-one 抓取 Dynamic 元数据中...`);
   const response = await axios.retryGet(url, {
     retry: {},
-    headers: { cookie: "locale=zh-cn" },
+    headers: getAsmrOneHeaders(language),
   });
   // console.log(`RJ${rjcode} asmr one data = `, response.data);
   // const data = JSON.parse(response.data);
   const data = response.data;
+
+  if (language === 'en-us' && Array.isArray(data.tags)) {
+    data.tags.forEach((tag) => {
+      const translatedName = tag.i18n && tag.i18n['en-us'] && tag.i18n['en-us'].name;
+      if (translatedName) {
+        tag.name = translatedName;
+      }
+    });
+  }
 
   // va的UUID可能和asmrOne不同，这里做一次强制转换
   data.vas.forEach((va) => {

@@ -5,6 +5,7 @@ const LimitPromise = require('limit-promise'); // 限制并发数量
 const axios = require('../scraper/axios.js'); // 数据请求
 const { scrapeWorkMetadataFromDLsite, scrapeDynamicWorkMetadataFromDLsite } = require('../scraper/dlsite');
 const { scrapeWorkMetadataFromAsmrOne } = require('../scraper/asmrOne');
+const scrapeWorkMetadataFromHVDB = require('../scraper/hvdb');
 const { scrapeWorkMemo } = require('../scraper/memo');
 
 const db = require('../database/db');
@@ -171,7 +172,14 @@ async function scrapeWorkMetadata(id, language) {
         })
         .catch(err => {
           logger.task.warn(rjcode, `asmr-one 获取元数据失败: ${err.message}`);
-          throw err;
+          return scrapeWorkMetadataFromHVDB(id)
+            .then(metadata => {
+              return metadata;
+            })
+            .catch(err => {
+              logger.task.warn(rjcode, `HVDB metadata request failed: ${err.message}`);
+              throw err;
+            });
         });
     });
 }
