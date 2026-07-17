@@ -10,14 +10,14 @@ const db = require('../database/db');
 router.post('/user', [
   check('name')
     .isLength({ min: 5 })
-    .withMessage('用户名长度至少为 5'),
+    .withMessage('Username must be at least 5 characters long'),
   check('password')
     .isLength({ min: 5 })
-    .withMessage('密码长度至少为 5'),
+    .withMessage('Password must be at least 5 characters long'),
   check('group')
     .custom(value => {
       if (value !== 'user' && value !== 'guest') {
-        throw new Error(`用户组名称必须为 ['user', 'guest'] 的一个.`)
+        throw new Error(`User group must be either 'user' or 'guest'.`)
       }
       return true
     })
@@ -40,16 +40,16 @@ router.post('/user', [
       password: md5(user.password),
       group: user.group
     })
-      .then(() => res.send({ message: `用户 ${user.name} 创建成功.` }))
+      .then(() => res.send({ message: `User ${user.name} was created.` }))
       .catch((err) => {
         if (err.message.indexOf('已存在') !== -1) {
-          res.status(403).send({ error: err.message });
+          res.status(403).send({ error: 'Username already exists.' });
         } else {
           next(err);
         }
       });
   } else {
-    res.status(403).send({ error: '只有 admin 账号能创建新用户.' });
+    res.status(403).send({ error: 'Only the admin account can create users.' });
   }
 });
 
@@ -57,10 +57,10 @@ router.post('/user', [
 router.put('/user', [
   check('name')
     .isLength({ min: 5 })
-    .withMessage('用户名长度至少为 5'),
+    .withMessage('Username must be at least 5 characters long'),
   check('newPassword')
     .isLength({ min: 5 })
-    .withMessage('密码长度至少为 5')
+    .withMessage('Password must be at least 5 characters long')
 ], (req, res, next) => {
   // Finds the validation errors in this request and wraps them in an object with handy functions
   const errors = validationResult(req);
@@ -75,16 +75,16 @@ router.put('/user', [
 
   if (!config.auth || req.user.name === 'admin' || req.user.name === user.name) {
     db.updateUserPassword(user, newPassword)
-      .then(() => res.send({ message: '密码修改成功.' }))
+      .then(() => res.send({ message: 'Password changed successfully.' }))
       .catch((err) => {
         if (err.message.indexOf('用户名错误.') !== -1) {
-          res.status(403).send({ error: '用户名错误.' });
+          res.status(403).send({ error: 'Username not found.' });
         } else {
           next(err);
         }
       });
   } else {
-    res.status(403).send({ error: '只能修改自己账号的密码.' });
+    res.status(403).send({ error: 'You can only change your own password.' });
   }
 });
 
@@ -96,16 +96,16 @@ router.delete('/user', (req, res, next) => {
     if (!users.find(user => user.name === 'admin')) {
       db.deleteUser(users)
         .then(() => {
-          res.send({ message: '删除成功.' });  
+          res.send({ message: 'Deleted successfully.' });
         })
         .catch((err) => {
           next(err);
         });
     } else {
-      res.status(403).send({ error: '不能删除内置的管理员账号.' });
+      res.status(403).send({ error: 'The built-in admin account cannot be deleted.' });
     }
   } else {
-    res.status(403).send({ error: '只有 admin 账号能删除用户.' });
+    res.status(403).send({ error: 'Only the admin account can delete users.' });
   }
 });
 
@@ -121,7 +121,7 @@ router.get('/users', (req, res, next) => {
       next(err);
     });
   } else {
-    res.status(403).send({ error: '只有 admin 账号能浏览用户.' });
+    res.status(403).send({ error: 'Only the admin account can view users.' });
   }
 });
 

@@ -41,7 +41,7 @@ router.get('/',
         }
       });
     } catch(err) {
-      res.status(500).send({error: '查询过程中出错'});
+      res.status(500).send({error: 'An error occurred while querying data.'});
       console.error(err)
     }
 });
@@ -70,12 +70,12 @@ router.put('/',
     db.updateUserReview(username, req.body.work_id, req.body.rating, req.body.review_text, req.body.progress, starOnly, progressOnly)
         .then(() => {
           if (progressOnly) {
-            res.send({ message: '更新进度成功' });
+            res.send({ message: 'Progress updated successfully.' });
           } else {
-            res.send({ message: '评价成功' });
+            res.send({ message: 'Rating saved successfully.' });
           }
         }).catch((err) =>{
-          res.status(500).send({ error: '评价失败，服务器错误' });
+          res.status(500).send({ error: 'Could not save the rating: server error.' });
           console.error(err);
         })
 });
@@ -89,7 +89,7 @@ router.delete('/',
     let username = config.auth ? req.user.name : 'admin';
     db.deleteUserReview(username, req.query.work_id)
       .then(() => {
-        res.send({message: '删除标记成功'});
+        res.send({message: 'Mark removed successfully.'});
       }).catch((err) => next(err));
 });
 

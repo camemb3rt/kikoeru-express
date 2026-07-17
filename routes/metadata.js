@@ -57,9 +57,9 @@ router.get('/tracks/:id', param('id').isInt(), (req, res, next) => {
       if (rootFolder) {
         getTrackList(req.params.id, path.join(rootFolder.path, work.dir), JSON.parse(work.memo))
           .then(tracks => res.send(toTree(tracks, work.title, work.dir, rootFolder)))
-          .catch(() => res.status(500).send({ error: '获取文件列表失败，请检查文件是否存在或重新扫描清理' }));
+          .catch(() => res.status(500).send({ error: 'Could not load the file list. Check that the files exist or run a rescan.' }));
       } else {
-        res.status(500).send({ error: `找不到文件夹: "${work.root_folder}"，请尝试重启服务器或重新扫描.` });
+        res.status(500).send({ error: `Folder not found: "${work.root_folder}". Try restarting the server or running a rescan.` });
       }
     })
     .catch(err => next(err));
@@ -142,7 +142,7 @@ router.get(
         totalCount: totalCount[0]['count']
       });
     } catch (err) {
-      res.status(500).send({ error: '服务器错误' });
+      res.status(500).send({ error: 'Server error' });
       console.error(err);
       // next(err);
     }
@@ -233,7 +233,7 @@ router.get('/search', async (req, res, next) => {
       totalCount: totalCount[0]['count']
     });
   } catch (err) {
-    res.status(500).send({ error: '查询过程中出错' });
+    res.status(500).send({ error: 'An error occurred while querying data.' });
     console.error(err);
     next(err);
   }

@@ -34,7 +34,7 @@ async function getWorkAndRoot(id) {
   );
 
   if (!rootFolder) {
-    throw new Error(`找不到文件夹: "${work.root_folder}"`);
+    throw new Error(`Folder not found: "${work.root_folder}"`);
   }
 
   return { work, rootFolder };
@@ -246,7 +246,7 @@ router.get(
     if (found) {
       return res.send({
         result: true,
-        message: '找到歌词文件',
+        message: 'Lyric file found.',
         mediaPath: found.mediaPath,
         lyricExtension: path.extname(found.title).toLowerCase()
       });
@@ -254,7 +254,7 @@ router.get(
 
     return res.send({
       result: false,
-      message: '该文件不存在歌词文件',
+      message: 'No lyric file was found for this track.',
       mediaPath: ''
     });
   })

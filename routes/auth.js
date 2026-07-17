@@ -13,10 +13,10 @@ const router = express.Router();
 router.post('/me', [
   check('name')
     .isLength({ min: 5 })
-    .withMessage('用户名长度至少为 5'),
+    .withMessage('Username must be at least 5 characters long'),
   check('password')
     .isLength({ min: 5 })
-    .withMessage('密码长度至少为 5')
+    .withMessage('Password must be at least 5 characters long')
 // eslint-disable-next-line no-unused-vars
 ], (req, res, next) => {
   // Finds the validation errors in this request and wraps them in an object with handy functions
@@ -35,7 +35,7 @@ router.post('/me', [
     .then((user) => {
       if (!user) {
         res.set("WWW-Authenticate", "Bearer realm=\"Authorization Required\"");
-        res.status(401).send({error: '用户名或密码错误.'});
+        res.status(401).send({error: 'Incorrect username or password.'});
       } else {
         const token = signToken(user);
         res.send({ token });
@@ -43,7 +43,7 @@ router.post('/me', [
     })
     .catch((err) => {
       console.error(err);
-      res.status(500).send({error: '服务器错误'});
+      res.status(500).send({error: 'Server error'});
       // next(err);
     });
 });
