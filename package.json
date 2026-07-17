@@ -95,5 +95,8 @@
     "eslint-plugin-node": "^11.1.0",
     "mocha": "^11.7.5",
     "serve-index": "^1.9.1"
+  },
+  "overrides": {
+    "async": "^3.2.6"
   }
 }

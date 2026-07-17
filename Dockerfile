@@ -40,7 +40,9 @@ COPY --from=build-frontend /frontend/dist/${FRONTEND_TYPE} /usr/src/kikoeru/dist
 COPY . .
 
 # Install tini
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini \
+    && rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx
 
 ENTRYPOINT ["/sbin/tini", "--"]
 
