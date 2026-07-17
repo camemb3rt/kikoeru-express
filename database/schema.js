@@ -71,6 +71,7 @@ const createSchema = () => knex.schema
     table.string('review_text'); // 用户评价文字
     table.timestamps(true, true); // 时间戳created_at, updated_at
     table.string('progress'); // ['marked', 'listening', 'listened', 'replay'，'postponed', null]
+    table.boolean('favorite').notNullable().defaultTo(false);
     table.foreign('user_name').references('name').inTable('t_user').onDelete('CASCADE'); // FOREIGN KEY 
     table.foreign('work_id').references('id').inTable('t_work').onDelete('CASCADE'); // FOREIGN KEY 
     table.primary(['user_name', 'work_id']); // PRIMARY KEY

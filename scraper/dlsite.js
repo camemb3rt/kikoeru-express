@@ -1,7 +1,7 @@
 const cheerio = require('cheerio'); // 解析器
 
 const axios = require('./axios'); // 数据请求
-const { nameToUUID, hasLetter } = require('./utils');
+const { nameToUUID, hasLetter, toDlsiteWorkCode } = require('./utils');
 const scrapeWorkMetadataFromHVDB = require('./hvdb');
 
 /**
@@ -12,8 +12,9 @@ const scrapeWorkMetadataFromHVDB = require('./hvdb');
 const scrapeStaticWorkMetadataFromDLsite = (id, language) =>
   new Promise((resolve, reject) => {
     const rjcode = id;
+    const dlsiteRjcode = toDlsiteWorkCode(id);
     const localeQuery = language === 'en-us' ? '?locale=en_US' : '';
-    const url = `https://www.dlsite.com/maniax/work/=/product_id/RJ${rjcode}.html${localeQuery}`;
+    const url = `https://www.dlsite.com/maniax/work/=/product_id/RJ${dlsiteRjcode}.html${localeQuery}`;
 
     const work = { id, tags: [], vas: [] };
     let AGE_RATINGS, VA, GENRE, RELEASE, SERIES, COOKIE_LOCALE;
@@ -219,13 +220,14 @@ const scrapeStaticWorkMetadataFromDLsite = (id, language) =>
 const scrapeDynamicWorkMetadataFromDLsite = id =>
   new Promise((resolve, reject) => {
     const rjcode = id;
-    const url = `https://www.dlsite.com/maniax-touch/product/info/ajax?product_id=RJ${rjcode}`;
+    const dlsiteRjcode = toDlsiteWorkCode(id);
+    const url = `https://www.dlsite.com/maniax-touch/product/info/ajax?product_id=RJ${dlsiteRjcode}`;
 
     console.log(`-> [RJ${rjcode}] 从 DLSite 抓取 Dynamic 元数据中...`);
 
     axios
       .retryGet(url, { retry: {} })
-      .then(response => response.data[`RJ${rjcode}`])
+      .then(response => response.data[`RJ${dlsiteRjcode}`])
       .then(data => {
         const work = {};
         work.dl_count = data.dl_count ? data.dl_count : '0'; // 售出数

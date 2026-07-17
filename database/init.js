@@ -22,6 +22,15 @@ const initApp = async () => {
     await knexMigrate('skipAll', {});
   }
 
+  async function ensureFavoriteColumn () {
+    const { knex } = require('./db');
+    if (await knex.schema.hasTable('t_review') && !(await knex.schema.hasColumn('t_review', 'favorite'))) {
+      await knex.schema.alterTable('t_review', table => {
+        table.boolean('favorite').notNullable().defaultTo(false);
+      });
+    }
+  }
+
   // Fix a nasty bug introduced in v0.5.1
   async function fixMigrations () {
     if (compareVersions.compare(configVersion, 'v0.5.1', '>=') && compareVersions.compare(configVersion, 'v0.5.3', '<')) {
@@ -78,6 +87,7 @@ const initApp = async () => {
       updateConfig();
     }
   }
+  await ensureFavoriteColumn();
 }
 
 module.exports = { initApp };

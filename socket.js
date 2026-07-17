@@ -29,7 +29,7 @@ const initSocket = (server) => {
   io.on('connection', function (socket) {
     // console.log('connection');
     socket.emit('success', {
-      message: '成功登录管理后台.',
+      message: 'Connected to the administrator service.',
       user: socket.request.user,
       auth: config.auth
     });
@@ -81,6 +81,38 @@ const initSocket = (server) => {
           }
         });
       }   
+    });
+
+    socket.on('PERFORM_WORK_UPDATE', (workId) => {
+      if (!scanner && typeof workId === 'string' && /^\d+$/.test(workId)) {
+        scanner = child_process.fork(
+          path.join(__dirname, './filesystem/updater.js'),
+          ['--refreshAll', '--workId', workId],
+          { silent: false }
+        );
+        scanner.on('exit', (code) => {
+          scanner = null;
+          if (code) {
+            io.emit('SCAN_ERROR');
+          } else {
+            io.emit('WORK_UPDATE_FINISHED', { workId });
+          }
+        });
+
+        scanner.on('message', (m) => {
+          if (m.event) {
+            io.emit(m.event, m.payload);
+          }
+        });
+      } else if (scanner) {
+        socket.emit('WORK_UPDATE_REJECTED', {
+          message: 'Another scan or metadata refresh is already running.'
+        });
+      } else {
+        socket.emit('WORK_UPDATE_REJECTED', {
+          message: 'Invalid work ID.'
+        });
+      }
     });
 
     socket.on('PERFORM_MODIFY', () => {
