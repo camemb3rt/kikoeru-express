@@ -11,6 +11,7 @@ const compareVersions = require('compare-versions');
 const versionWithoutVerTracking = '0.4.1';
 // Before the following version, db path is using the absolute path in databaseFolderDir of config.json
 const versionDbRelativePath = '0.5.8';
+const legacyDefaultTagLanguage = 'ja-jp';
 
 let config = {};
 
@@ -48,7 +49,7 @@ const defaultConfig = {
   expiresIn: 2592000,
   scannerMaxRecursionDepth: 2,
   pageSize: 12,
-  tagLanguage: 'ja-jp',
+  tagLanguage: 'en-us',
   retry: 5,
   dlsiteTimeout: 10000,
   hvdbTimeout: 10000,
@@ -105,6 +106,12 @@ const readConfig = () => {
         config[key] = defaultConfig[key];
       }
     }
+  }
+
+  // English tags are now the default. Preserve explicitly selected Chinese
+  // locales while migrating installations that used the old Japanese default.
+  if (config.tagLanguage === legacyDefaultTagLanguage) {
+    config.tagLanguage = defaultConfig.tagLanguage;
   }
 
   // Support reading relative path

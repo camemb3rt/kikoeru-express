@@ -12,11 +12,20 @@ const scrapeWorkMetadataFromHVDB = require('./hvdb');
 const scrapeStaticWorkMetadataFromDLsite = (id, language) =>
   new Promise((resolve, reject) => {
     const rjcode = id;
-    const url = `https://www.dlsite.com/maniax/work/=/product_id/RJ${rjcode}.html`;
+    const localeQuery = language === 'en-us' ? '?locale=en_US' : '';
+    const url = `https://www.dlsite.com/maniax/work/=/product_id/RJ${rjcode}.html${localeQuery}`;
 
     const work = { id, tags: [], vas: [] };
     let AGE_RATINGS, VA, GENRE, RELEASE, SERIES, COOKIE_LOCALE;
     switch (language) {
+      case 'en-us':
+        COOKIE_LOCALE = 'locale=en_US';
+        AGE_RATINGS = 'Age Rating';
+        GENRE = 'Genre';
+        VA = 'Voice Actor';
+        RELEASE = 'Release Date';
+        SERIES = 'Series';
+        break;
       case 'ja-jp':
         COOKIE_LOCALE = 'locale=ja-jp';
         AGE_RATINGS = '年齢指定';
