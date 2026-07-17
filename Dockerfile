@@ -28,6 +28,7 @@ RUN quasar build && quasar build -m pwa
 # Final stage
 FROM node:24-alpine
 ENV IS_DOCKER=true
+ENV PORT=5232
 WORKDIR /usr/src/kikoeru
 
 # Copy build artifacts
@@ -46,5 +47,5 @@ ENTRYPOINT ["/sbin/tini", "--"]
 # 持久化
 VOLUME [ "/usr/src/kikoeru/sqlite", "/usr/src/kikoeru/config", "/usr/src/kikoeru/covers"]
 
-EXPOSE 8888
+EXPOSE 5232
 CMD [ "node", "app.js" ]

@@ -56,7 +56,7 @@ const defaultConfig = {
   retryDelay: 2000,
   httpProxyHost: '',
   httpProxyPort: 0,
-  listenPort: 8888,
+  listenPort: 5232,
   blockRemoteConnection: false,
   behindProxy: false,
   httpsEnabled: false,
