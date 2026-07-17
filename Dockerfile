@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:24-alpine as build-dep
+FROM node:24-alpine AS build-dep
 
 # Create app directory
 WORKDIR /usr/src/kikoeru
@@ -12,7 +12,7 @@ RUN apk add --no-cache python3 py3-setuptools make gcc g++ \
     && npm ci --only=production
 
 # Build SPA and PWA
-FROM node:14 as build-frontend
+FROM node:14 AS build-frontend
 WORKDIR /frontend
 # @quasar/app v1 requires node-ass, which takes 30 minutes to compile libsass in CI for arm64 and armv7
 # So I prebuilt the binaries for arm64 and armv7
@@ -40,7 +40,9 @@ COPY --from=build-frontend /frontend/dist/${FRONTEND_TYPE} /usr/src/kikoeru/dist
 COPY . .
 
 # Install tini
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini \
+    && rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx
 
 ENTRYPOINT ["/sbin/tini", "--"]
 

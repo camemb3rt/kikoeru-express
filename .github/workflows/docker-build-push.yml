@@ -1,70 +1,78 @@
-name: Publish Docker image
+name: Build and publish Docker image
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
-      version:
-        description: Release version to publish (for example, v0.7.0)
+      tag:
+        description: Docker tag to publish
         required: true
-        default: v0.7.0
+        default: test
         type: string
-
-env:
-  DOCKERHUB_REPO: camemb3rt/kikoeru
 
 permissions:
   contents: read
 
 jobs:
-  publish:
+  docker:
+    name: Build Docker image
     runs-on: ubuntu-latest
 
     steps:
-      - name: Select release version
-        id: version
-        shell: bash
-        run: |
-          VERSION="${{ github.event.release.tag_name || inputs.version }}"
-          VERSION="${VERSION#v}"
-          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Check out backend
+        uses: actions/checkout@v6
 
-      - name: Checkout backend
-        uses: actions/checkout@v4
-        with:
-          path: backend
-          ref: ${{ github.event.release.tag_name || github.sha }}
-
-      - name: Checkout frontend
-        uses: actions/checkout@v4
+      - name: Check out frontend
+        uses: actions/checkout@v6
         with:
           repository: camemb3rt/kikoeru-quasar
-          path: frontend
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: main
+          path: kikoeru-quasar
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract Docker image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ vars.DOCKER_USERNAME }}/kikoeru
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,prefix=sha-
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ vars.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and publish image
-        uses: docker/build-push-action@v6
+      - name: Build and publish Docker image
+        uses: docker/build-push-action@v7
         with:
-          context: backend
-          file: backend/Dockerfile
+          context: .
+          file: ./Dockerfile
           build-contexts: |
-            frontend=frontend
-          push: true
+            frontend=./kikoeru-quasar
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ env.DOCKERHUB_REPO }}:v${{ steps.version.outputs.value }}
-            ${{ env.DOCKERHUB_REPO }}:${{ steps.version.outputs.value }}
-            ${{ env.DOCKERHUB_REPO }}:latest
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
