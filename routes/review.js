@@ -15,6 +15,9 @@ router.get('/',
   query('seed').optional({nullable: true}).isInt(),
   query('filter').optional({nullable: true}).isIn(['marked', 'listening', 'listened', 'replay', 'postponed']),
   query('favorite').optional({nullable: true}).isBoolean(),
+  query('review').optional({nullable: true}).isBoolean(),
+  query('minRating').optional({nullable: true}).isInt({ min: 1, max: 5 }),
+  query('tag').optional({nullable: true}).trim().isLength({ min: 1, max: 100 }),
   // eslint-disable-next-line no-unused-vars
   async (req, res, next) => {
     if(!isValidRequest(req, res)) return;
@@ -28,9 +31,12 @@ router.get('/',
     const username = config.auth ? req.user.name : 'admin';
     const filter = req.query.filter;
     const favoriteOnly = req.query.favorite === 'true';
+    const reviewOnly = req.query.review === 'true';
+    const minRating = req.query.minRating ? parseInt(req.query.minRating) : null;
+    const tag = req.query.tag;
     
     try {
-      const {works, totalCount} = await db.getWorksWithReviews({username: username, limit: PAGE_SIZE, offset: offset, orderBy: order, sortOption: sort, filter, favoriteOnly});
+      const {works, totalCount} = await db.getWorksWithReviews({username: username, limit: PAGE_SIZE, offset: offset, orderBy: order, sortOption: sort, filter, favoriteOnly, reviewOnly, minRating, tag});
 
       normalize(works, {dateOnly: true});
 

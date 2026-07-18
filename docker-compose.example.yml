@@ -1,0 +1,20 @@
+services:
+  kikoeru:
+    image: camemb3rt/kikoeru:latest
+    container_name: kikoeru
+    ports:
+      - "5232:5232"
+    volumes:
+      # Mount the folder containing your audio works. Add this path as a root
+      # folder in Kikoeru's Admin Panel after the container starts.
+      - ./library:/library:ro
+      # Persist Kikoeru's database, configuration, and downloaded cover art.
+      - ./data/sqlite:/usr/src/kikoeru/sqlite
+      - ./data/config:/usr/src/kikoeru/config
+      - ./data/covers:/usr/src/kikoeru/covers
+    restart: unless-stopped
+
+# Optional: route metadata scraping through a VPN container such as Gluetun.
+# See the README before enabling this: port 5232 must be published by the
+# Gluetun service, and the Kikoeru service should use `network_mode:
+# service:gluetun` instead of its own `ports` section.

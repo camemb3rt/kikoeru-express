@@ -515,6 +515,9 @@ const getWorksWithReviews = async ({
   sortOption = "desc",
   filter,
   favoriteOnly = false,
+  reviewOnly = false,
+  minRating = null,
+  tag = null,
 } = {}) => {
   let works = [];
   let totalCount = 0;
@@ -551,15 +554,50 @@ const getWorksWithReviews = async ({
         { column: "id", order: "desc" },
       ]);
 
+  const applyTagFilter = (workQuery) => {
+    if (!tag) return workQuery;
+
+    const tagTerms = tag.split(',').map(term => term.trim()).filter(Boolean);
+    tagTerms.forEach(tagTerm => {
+      const taggedWorkIds = knex('r_tag_work')
+        .select('r_tag_work.work_id')
+        .join('t_tag', 't_tag.id', 'r_tag_work.tag_id')
+        .where('t_tag.name', 'like', `%${tagTerm}%`);
+
+      workQuery.where('staticMetadata.id', 'in', taggedWorkIds);
+    });
+
+    return workQuery;
+  };
+
+  const applyReviewFilters = (reviewQuery) => {
+    reviewQuery.where(function () {
+      this.where('userrate.userRating', '>', 0)
+        .orWhere(function () {
+          this.whereNotNull('userrate.review_text')
+            .whereRaw("trim(userrate.review_text) <> ''")
+        })
+    });
+
+    if (minRating) {
+      reviewQuery.andWhere('userrate.userRating', '>=', minRating);
+    }
+
+    return reviewQuery;
+  };
+
   if (favoriteOnly) {
-    totalCount = await query().where("favorite", "=", true).count("id as count");
-    works = await query().where("favorite", "=", true).limit(limit).offset(offset);
+    totalCount = await applyTagFilter(query()).where("favorite", "=", true).count("id as count");
+    works = await applyTagFilter(query()).where("favorite", "=", true).limit(limit).offset(offset);
+  } else if (reviewOnly) {
+    totalCount = await applyReviewFilters(applyTagFilter(query())).count("id as count");
+    works = await applyReviewFilters(applyTagFilter(query())).limit(limit).offset(offset);
   } else if (filter) {
-    totalCount = await query().where("progress", "=", filter).count("id as count");
-    works = await query().where("progress", "=", filter).limit(limit).offset(offset);
+    totalCount = await applyTagFilter(query()).where("progress", "=", filter).count("id as count");
+    works = await applyTagFilter(query()).where("progress", "=", filter).limit(limit).offset(offset);
   } else {
-    totalCount = await query().count("id as count");
-    works = await query().limit(limit).offset(offset);
+    totalCount = await applyTagFilter(query()).count("id as count");
+    works = await applyTagFilter(query()).limit(limit).offset(offset);
   }
 
   return { works, totalCount };
