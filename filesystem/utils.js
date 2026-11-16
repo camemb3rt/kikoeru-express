@@ -261,18 +261,28 @@ async function* getFolderList(rootFolder, current = '', depth = 0, callback = fu
  * Deletes a work's cover image from disk.
  * @param {String} rjcode Work RJ code (only the 6 digits, zero-padded).
  */
+const manualCoverMarkerPath = rjcode => path.join(config.coverFolderDir, `RJ${rjcode}_img_manual`);
+
+const hasManualCover = rjcode => fs.existsSync(manualCoverMarkerPath(rjcode));
+
 const deleteCoverImageFromDisk = rjcode =>
   new Promise((resolve, reject) => {
     const types = ['main', 'sam', '240x240', '360x360'];
-    types.forEach(type => {
-      try {
-        fs.unlinkSync(path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.jpg`));
-      } catch (err) {
-        reject(err);
-      }
-    });
-
-    resolve();
+    try {
+      [...types.flatMap(type => [
+        `RJ${rjcode}_img_${type}.jpg`,
+        `RJ${rjcode}_img_${type}.png`
+      ]), `RJ${rjcode}_img_manual`].forEach(filename => {
+        try {
+          fs.unlinkSync(path.join(config.coverFolderDir, filename));
+        } catch (err) {
+          if (err.code !== 'ENOENT') throw err;
+        }
+      });
+      resolve();
+    } catch (err) {
+      reject(err);
+    }
   });
 
 /**
@@ -281,19 +291,24 @@ const deleteCoverImageFromDisk = rjcode =>
  * @param {String} rjcode Work RJ code (only the 6 digits, zero-padded).
  * @param {String} types img type: ('main', 'sam', 'sam@2x', 'sam@3x', '240x240', '360x360').
  */
-const saveCoverImageToDisk = (stream, rjcode, type) =>
-  new Promise((resolve, reject) => {
-    // TODO: don't assume image is a jpg?
-    try {
-      stream.pipe(
-        fs
-          .createWriteStream(path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.jpg`))
-          .on('close', () => resolve())
-      );
-    } catch (err) {
-      reject(err);
-    }
-  });
+const saveCoverImageToDisk = async (stream, rjcode, type, expectedLength) => {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  const image = Buffer.concat(chunks);
+  const isJpeg = image.length >= 3 && image[0] === 0xff && image[1] === 0xd8 && image[2] === 0xff;
+  const isPng = image.length >= 8 && image.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const isWebp = image.length >= 12 && image.subarray(0, 4).toString() === 'RIFF' && image.subarray(8, 12).toString() === 'WEBP';
+
+  if (!isJpeg && !isPng && !isWebp) throw new Error('Cover source did not return a valid image.');
+  if (expectedLength && image.length !== expectedLength) {
+    throw new Error(`Cover download was incomplete (received ${image.length} of ${expectedLength} bytes).`);
+  }
+
+  const destination = path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.jpg`);
+  const temporary = `${destination}.tmp`;
+  fs.writeFileSync(temporary, image);
+  fs.renameSync(temporary, destination);
+};
 
 module.exports = {
   getTrackList,
@@ -301,6 +316,8 @@ module.exports = {
   getFolderList,
   deleteCoverImageFromDisk,
   saveCoverImageToDisk,
+  hasManualCover,
+  manualCoverMarkerPath,
   supportedMediaExtList,
   supportedSubtitleExtList,
   supportedImageExtList,

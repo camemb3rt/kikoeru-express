@@ -8,6 +8,7 @@ It is maintained together with the Vue/Quasar frontend in [kikoeru-quasar](https
 
 - English-first metadata scraping from DLsite and ASMR.one, with HVDB as a fallback.
 - Translation-aware cover downloads: translated work IDs are resolved to the original DLsite cover artwork, with ASMR.one cover fallback.
+- Manual JPEG or PNG cover uploads, retained during later metadata scans.
 - Support for `.lrc`, `.vtt`, and `.srt` lyric/subtitle files.
 - Per-work metadata refreshes with live scanner logs and missing-cover retrieval.
 - English scanner and metadata refresh messages.

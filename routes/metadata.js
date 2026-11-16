@@ -4,12 +4,31 @@ const express = require('express');
 const router = express.Router();
 const { param, query } = require('express-validator');
 const db = require('../database/db');
-const { getTrackList, toTree } = require('../filesystem/utils');
+const { getTrackList, toTree, manualCoverMarkerPath } = require('../filesystem/utils');
 const { config } = require('../config');
 const normalize = require('./utils/normalize');
 const { isValidRequest } = require('./utils/validate');
 
 const PAGE_SIZE = config.pageSize || 12;
+const coverTypes = ['main', 'sam', '240x240', '360x360'];
+const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+const getCoverPath = (rjcode, type) => {
+  const markerPath = manualCoverMarkerPath(rjcode);
+  if (fs.existsSync(markerPath)) {
+    const extension = fs.readFileSync(markerPath, 'utf8').trim();
+    if (['jpg', 'png'].includes(extension)) {
+      const manualPath = path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.${extension}`);
+      if (fs.existsSync(manualPath)) return manualPath;
+    }
+  }
+
+  for (const extension of ['jpg', 'png']) {
+    const coverPath = path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.${extension}`);
+    if (fs.existsSync(coverPath)) return coverPath;
+  }
+  return null;
+};
 
 // GET work cover image
 router.get('/cover/:id', param('id').isString(), (req, res, next) => {
@@ -17,23 +36,18 @@ router.get('/cover/:id', param('id').isString(), (req, res, next) => {
 
   const rjcode = req.params.id;
   const type = req.query.type || 'main'; // 'main', 'sam', '240x240', '360x360'
-  res.sendFile(path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.jpg`), err => {
-    if (err) {
-      res.sendFile(path.join(__dirname, '../static/no-image.jpg'), err2 => {
-        if (err2) {
-          next(err2);
-        }
-      });
-    }
+  const coverPath = getCoverPath(rjcode, type);
+  res.sendFile(coverPath || path.join(__dirname, '../static/no-image.jpg'), err => {
+    if (err) next(err);
   });
 });
 
-// Manually replace a work cover. A single JPEG is stored for every cover size
+// Manually replace a work cover. A single JPEG or PNG is stored for every cover size
 // so that the work page, cards, and compact player all update together.
 router.put(
   '/cover/:id',
   param('id').isInt(),
-  express.raw({ type: 'image/jpeg', limit: '10mb' }),
+  express.raw({ type: ['image/jpeg', 'image/png'], limit: '10mb' }),
   async (req, res, next) => {
     if (!isValidRequest(req, res)) return;
 
@@ -41,11 +55,13 @@ router.put(
       return res.status(403).send({ error: 'Only the admin account can upload cover art.' });
     }
 
-    if (!Buffer.isBuffer(req.body) || req.body.length < 4 || req.body[0] !== 0xff || req.body[1] !== 0xd8 || req.body[2] !== 0xff) {
-      return res.status(400).send({ error: 'Upload a JPEG image smaller than 10 MB.' });
+    const isJpeg = Buffer.isBuffer(req.body) && req.body.length >= 3 && req.body[0] === 0xff && req.body[1] === 0xd8 && req.body[2] === 0xff;
+    const isPng = Buffer.isBuffer(req.body) && req.body.length >= 8 && req.body.subarray(0, 8).equals(pngSignature);
+    if (!isJpeg && !isPng) {
+      return res.status(400).send({ error: 'Upload a JPEG or PNG image smaller than 10 MB.' });
     }
 
-    const coverTypes = ['main', 'sam', '240x240', '360x360'];
+    const extension = isPng ? 'png' : 'jpg';
     const rjcode = req.params.id;
 
     try {
@@ -55,9 +71,15 @@ router.put(
       }
       fs.mkdirSync(config.coverFolderDir, { recursive: true });
       coverTypes.forEach(type => {
-        fs.writeFileSync(path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.jpg`), req.body);
+        for (const oldExtension of ['jpg', 'png']) {
+          if (oldExtension !== extension) {
+            fs.rmSync(path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.${oldExtension}`), { force: true });
+          }
+        }
+        fs.writeFileSync(path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.${extension}`), req.body);
       });
-      res.send({ message: 'Cover art uploaded successfully.' });
+      fs.writeFileSync(manualCoverMarkerPath(rjcode), extension);
+      res.send({ message: 'Cover art uploaded successfully and will be kept during scans.' });
     } catch (err) {
       next(err);
     }
