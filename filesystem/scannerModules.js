@@ -12,7 +12,7 @@ const { scrapeWorkMemo } = require('../scraper/memo');
 const db = require('../database/db');
 const { createSchema } = require('../database/schema');
 
-const { getFolderList, deleteCoverImageFromDisk, saveCoverImageToDisk } = require('./utils');
+const { getFolderList, deleteCoverImageFromDisk, saveCoverImageToDisk, hasManualCover } = require('./utils');
 const { md5 } = require('../auth/utils');
 const { nameToUUID, toDlsiteWorkCode } = require('../scraper/utils');
 
@@ -259,6 +259,10 @@ const resolveDlsiteCoverCode = async id => {
  */
 const getCoverImage = async (id, types) => {
   const rjcode = String(id);
+  if (hasManualCover(rjcode)) {
+    logger.task.info(rjcode, 'Keeping manually uploaded cover art.');
+    return 'skipped';
+  }
   let dlsiteCoverCode = String(id);
   try {
     dlsiteCoverCode = await resolveDlsiteCoverCode(id);
@@ -278,7 +282,8 @@ const getCoverImage = async (id, types) => {
       for (const url of urls) {
         try {
           const imageRes = await axios.retryGet(url, { responseType: 'stream', retry: {} });
-          await saveCoverImageToDisk(imageRes.data, rjcode, type);
+          const expectedLength = Number(imageRes.headers['content-length']) || undefined;
+          await saveCoverImageToDisk(imageRes.data, rjcode, type, expectedLength);
           logger.task.info(rjcode, `Cover image RJ${rjcode}_img_${type}.jpg downloaded successfully.`);
           return 'added';
         } catch (err) {
@@ -295,6 +300,7 @@ const getCoverImage = async (id, types) => {
 };
 
 const getMissingCoverTypes = id => {
+  if (hasManualCover(String(id))) return [];
   const coverTypes = ['main', 'sam', '240x240'];
   return coverTypes.filter(type => !fs.existsSync(path.join(config.coverFolderDir, `RJ${id}_img_${type}.jpg`)));
 };
