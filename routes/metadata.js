@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const router = express.Router();
 const { param, query } = require('express-validator');
@@ -26,6 +27,42 @@ router.get('/cover/:id', param('id').isString(), (req, res, next) => {
     }
   });
 });
+
+// Manually replace a work cover. A single JPEG is stored for every cover size
+// so that the work page, cards, and compact player all update together.
+router.put(
+  '/cover/:id',
+  param('id').isInt(),
+  express.raw({ type: 'image/jpeg', limit: '10mb' }),
+  async (req, res, next) => {
+    if (!isValidRequest(req, res)) return;
+
+    if (config.auth && req.user.name !== 'admin') {
+      return res.status(403).send({ error: 'Only the admin account can upload cover art.' });
+    }
+
+    if (!Buffer.isBuffer(req.body) || req.body.length < 4 || req.body[0] !== 0xff || req.body[1] !== 0xd8 || req.body[2] !== 0xff) {
+      return res.status(400).send({ error: 'Upload a JPEG image smaller than 10 MB.' });
+    }
+
+    const coverTypes = ['main', 'sam', '240x240', '360x360'];
+    const rjcode = req.params.id;
+
+    try {
+      const work = await db.knex('t_work').select('id').where('id', '=', rjcode).first();
+      if (!work) {
+        return res.status(404).send({ error: 'Work not found.' });
+      }
+      fs.mkdirSync(config.coverFolderDir, { recursive: true });
+      coverTypes.forEach(type => {
+        fs.writeFileSync(path.join(config.coverFolderDir, `RJ${rjcode}_img_${type}.jpg`), req.body);
+      });
+      res.send({ message: 'Cover art uploaded successfully.' });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // GET work metadata
 router.get('/work/RJ:id', param('id').isString(), (req, res, next) => {
